@@ -1,0 +1,83 @@
+import chalk from "chalk";
+import type { Command } from "commander";
+import { findSeedsDir } from "../config.ts";
+import { muted, outputJson } from "../output.ts";
+import { readIssues } from "../store.ts";
+import type { Issue } from "../types.ts";
+import { PRIORITY_LABELS } from "../types.ts";
+
+export async function run(args: string[], seedsDir?: string): Promise<void> {
+	const jsonMode = args.includes("--json");
+	const dir = seedsDir ?? (await findSeedsDir());
+	const issues = await readIssues(dir);
+
+	const total = issues.length;
+	const open = issues.filter((i: Issue) => i.status === "open").length;
+	const inProgress = issues.filter((i: Issue) => i.status === "in_progress").length;
+	const closed = issues.filter((i: Issue) => i.status === "closed").length;
+
+	const closedIds = new Set(issues.filter((i: Issue) => i.status === "closed").map((i) => i.id));
+	const blocked = issues.filter((i: Issue) => {
+		if (i.status === "closed") return false;
+		return (i.blockedBy ?? []).some((bid) => !closedIds.has(bid));
+	}).length;
+
+	const byType: Record<string, number> = {};
+	for (const issue of issues) {
+		byType[issue.type] = (byType[issue.type] ?? 0) + 1;
+	}
+
+	const byPriority: Record<number, number> = {};
+	for (const issue of issues) {
+		byPriority[issue.priority] = (byPriority[issue.priority] ?? 0) + 1;
+	}
+
+	const byLabel: Record<string, number> = {};
+	for (const issue of issues) {
+		for (const label of issue.labels ?? []) {
+			byLabel[label] = (byLabel[label] ?? 0) + 1;
+		}
+	}
+
+	if (jsonMode) {
+		outputJson({
+			success: true,
+			command: "stats",
+			stats: { total, open, inProgress, closed, blocked, byType, byPriority, byLabel },
+		});
+	} else {
+		console.log(`${chalk.bold("Project Statistics")}`);
+		console.log(`  ${muted("Total:")}       ${total}`);
+		console.log(`  ${muted("Open:")}        ${open}`);
+		console.log(`  ${muted("In progress:")} ${inProgress}`);
+		console.log(`  ${muted("Closed:")}      ${closed}`);
+		console.log(`  ${muted("Blocked:")}     ${blocked}`);
+		console.log(`\n${chalk.bold("By Type")}`);
+		for (const [type, count] of Object.entries(byType)) {
+			console.log(`  ${muted(type.padEnd(10))} ${count}`);
+		}
+		if (Object.keys(byPriority).length > 0) {
+			console.log(`\n${chalk.bold("By Priority")}`);
+			for (const [p, count] of Object.entries(byPriority)) {
+				const label = PRIORITY_LABELS[Number(p)] ?? String(p);
+				console.log(`  ${muted(`P${p} ${label.padEnd(10)}`)} ${count}`);
+			}
+		}
+		if (Object.keys(byLabel).length > 0) {
+			console.log(`\n${chalk.bold("By Label")}`);
+			for (const [label, count] of Object.entries(byLabel).sort((a, b) => b[1] - a[1])) {
+				console.log(`  ${muted(label.padEnd(15))} ${count}`);
+			}
+		}
+	}
+}
+
+export function register(program: Command): void {
+	program
+		.command("stats")
+		.description("Project statistics")
+		.option("--json", "Output as JSON")
+		.action(async (opts: { json?: boolean }) => {
+			await run(opts.json ? ["--json"] : []);
+		});
+}
